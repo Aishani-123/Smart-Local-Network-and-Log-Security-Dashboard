@@ -14,6 +14,9 @@ Small networks often lack simple, affordable tools for real-time security monito
 
 ## 💡 Objective
 
+The main objective of this project is to develop a simple and practical security dashboard for small local networks that continuously monitors system and network activity. It aims to store and analyze monitoring data, detect unusual behaviour using machine learning, and identify potential security incidents. The system also provides controlled responses based on predefined security policies and a real-time dashboard to help administrators monitor system health, alerts, incidents, and logs from one place.
+
+
 ## 👥 Team Members
 
 ## 🛠️ Technologies & Tools
@@ -27,6 +30,15 @@ Small networks often lack simple, affordable tools for real-time security monito
 
 
 ## ✨ Major Features
+
+* Real-time system and network monitoring
+* CPU, memory, process, and network activity tracking
+* Centralised log and incident storage using PostgreSQL
+* Anomaly detection using Isolation Forest
+* Threat levels and security incident generation
+* Policy-based and controlled incident response
+* Real-time Stream-lit dashboard
+* Historical log and incident monitoring
 
 ## 🏗️ Project Modules
 
