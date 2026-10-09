@@ -1,0 +1,409 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import joblib
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import IsolationForest
+
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    accuracy_score
+)
+
+#DataSet
+np.random.seed(50)
+normal_count = 500
+anomaly_count = 50cd..
+
+normal_connections = np.random.normal(
+    loc=15, #Mean
+    scale=4, #SD
+    size=normal_count
+)
+
+normal_bytes_sent = np.random.normal(
+    loc=1500,
+    scale=400,
+    size=normal_count
+)
+
+normal_failed_logins = np.random.poisson(
+    lam=1,
+    size=normal_count
+)
+
+normal_cpu_usage = np.random.normal(
+    loc=30,
+    scale=8,
+    size=normal_count
+)
+
+normal_memory_usage = np.random.normal(
+    loc=40,
+    scale=10,
+    size=normal_count
+)
+
+
+anomaly_connections = np.random.normal(
+    loc=150,
+    scale=40,
+    size=anomaly_count
+)
+
+anomaly_bytes_sent = np.random.normal(
+    loc=50000,
+    scale=15000,
+    size=anomaly_count
+)
+
+anomaly_failed_logins = np.random.poisson(
+    lam=25,
+    size=anomaly_count
+)
+
+anomaly_cpu_usage = np.random.normal(
+    loc=90,
+    scale=5,
+    size=anomaly_count
+)
+
+anomaly_memory_usage = np.random.normal(
+    loc=90,
+    scale=5,
+    size=anomaly_count
+)
+
+
+# Combine
+connections = np.concatenate([
+    normal_connections,
+    anomaly_connections
+])
+
+bytes_sent = np.concatenate([
+    normal_bytes_sent,
+    anomaly_bytes_sent
+])
+
+failed_logins = np.concatenate([
+    normal_failed_logins,
+    anomaly_failed_logins
+])
+
+cpu_usage = np.concatenate([
+    normal_cpu_usage,
+    anomaly_cpu_usage
+])
+
+memory_usage = np.concatenate([
+    normal_memory_usage,
+    anomaly_memory_usage
+])
+
+
+# Lables
+# 0 = Normal
+# 1 = Anomaly
+
+labels = np.concatenate([
+    np.zeros(normal_count),
+    np.ones(anomaly_count)
+])
+
+df = pd.DataFrame({
+    "connections": connections,
+    "bytes_sent": bytes_sent,
+    "failed_logins": failed_logins,
+    "cpu_usage": cpu_usage,
+    "memory_usage": memory_usage,
+    "label": labels
+})
+
+
+# Cleaning
+
+df["connections"] = df["connections"].clip(lower=0) #if val<0, replace with 0
+df["bytes_sent"] = df["bytes_sent"].clip(lower=0)
+df["failed_logins"] = df["failed_logins"].clip(lower=0)
+df["cpu_usage"] = df["cpu_usage"].clip(
+    lower=0,
+    upper=100
+)
+
+df["memory_usage"] = df["memory_usage"].clip(
+    lower=0,
+    upper=100
+)
+
+print("\nDATASET\n")
+print(df.head())
+print("\nDataset Shape:")
+print(df.shape)
+print("\nDataset Information:")
+print(df.info())
+print("\nStatistical Summary:")
+print(df.describe())
+print("\nClass Distribution:")
+print(df["label"].value_counts())
+
+features = ["connections","bytes_sent","failed_logins","cpu_usage","memory_usage"]
+X = df[features]
+y = df["label"]
+
+#Splitting
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42,
+    stratify=y
+)
+
+
+print("\nDATA SPLIT\n")
+print("Training samples:", len(X_train))
+print("Testing samples:", len(X_test))
+
+#Feature Scaling
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+print("\nFeature scaling completed.")
+
+model = IsolationForest(
+    n_estimators=200,
+    contamination=0.10,
+    max_samples="auto",
+    max_features=1.0,
+    random_state=42
+)
+
+print("\nMODEL TRAINING\n")
+model.fit(X_train_scaled)
+print("Isolation Forest training completed.")
+
+predictions = model.predict(X_test_scaled)
+
+# 1<->0, -1<->1
+
+predictions = np.where(
+    predictions == -1,
+    1,
+    0
+)
+
+
+#Anomaly Scores
+
+anomaly_scores = model.decision_function(
+    X_test_scaled
+)
+
+print("\nMODEL EVALUATION\n")
+
+accuracy = accuracy_score(
+    y_test,
+    predictions
+)
+
+print("Accuracy:", accuracy)
+print("\nConfusion Matrix:")
+
+cm = confusion_matrix(
+    y_test,
+    predictions
+)
+
+print(cm)
+
+print("\nClassification Report:")
+
+print(
+    classification_report(
+        y_test,
+        predictions,
+        target_names=[
+            "Normal",
+            "Anomaly"
+        ]
+    )
+)
+
+
+#Result DF
+
+results = X_test.copy()
+results["actual"] = y_test.values
+results["predicted"] = predictions
+results["anomaly_score"] = anomaly_scores
+
+results["actual_status"] = results["actual"].map({
+    0: "Normal",
+    1: "Anomaly"
+})
+
+results["predicted_status"] = results["predicted"].map({
+    0: "Normal",
+    1: "Anomaly"
+})
+
+print("\nPREDICTION RESULTS\n")
+print(
+    results[
+        [
+            "connections",
+            "bytes_sent",
+            "failed_logins",
+            "cpu_usage",
+            "memory_usage",
+            "actual_status",
+            "predicted_status",
+            "anomaly_score"
+        ]
+    ].head(20)
+)
+
+detected_anomalies = results[
+    results["predicted"] == 1
+]
+
+print("\nDETECTED ANOMALIES\n")
+print(detected_anomalies)
+
+#CM
+
+plt.figure(figsize=(6, 5))
+plt.imshow(cm)
+plt.title("Isolation Forest - Confusion Matrix")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.xticks(
+    [0, 1],
+    ["Normal", "Anomaly"]
+)
+
+plt.yticks(
+    [0, 1],
+    ["Normal", "Anomaly"]
+)
+
+for i in range(2):
+    for j in range(2):
+        plt.text(
+            j,
+            i,
+            cm[i, j],
+            ha="center",
+            va="center"
+        )
+
+plt.colorbar()
+plt.show()
+plt.figure(figsize=(10, 5))
+plt.scatter(
+    range(len(anomaly_scores)),
+    anomaly_scores,
+    c=predictions
+)
+
+plt.axhline(
+    y=0,
+    linestyle="--"
+)
+plt.title("Isolation Forest Anomaly Scores")
+plt.xlabel("Test Sample")
+plt.ylabel("Anomaly Score")
+plt.show()
+
+#CPU, net connections
+plt.figure(figsize=(8, 6))
+normal_points = results[
+    results["predicted"] == 0
+]
+
+anomaly_points = results[
+    results["predicted"] == 1
+]
+
+plt.scatter(
+    normal_points["connections"],
+    normal_points["cpu_usage"],
+    label="Normal"
+)
+
+plt.scatter(
+    anomaly_points["connections"],
+    anomaly_points["cpu_usage"],
+    label="Anomaly"
+)
+
+plt.xlabel("Network Connections")
+
+plt.ylabel("CPU Usage (%)")
+
+plt.title(
+    "Network Connections vs CPU Usage"
+)
+plt.legend()
+plt.show()
+
+#Saving model
+joblib.dump(
+    model,
+    "isolation_forest_model.pkl"
+)
+
+joblib.dump(
+    scaler,
+    "scaler.pkl"
+)
+
+#Loading model
+loaded_model = joblib.load(
+    "isolation_forest_model.pkl"
+)
+
+loaded_scaler = joblib.load(
+    "scaler.pkl"
+)
+
+#Testing
+new_process = pd.DataFrame({
+    "connections": [180],
+    "bytes_sent": [60000],
+    "failed_logins": [30],
+    "cpu_usage": [95],
+    "memory_usage": [92]
+})
+
+
+# Scale the new process
+new_process_scaled = loaded_scaler.transform(
+    new_process
+)
+
+
+# Predict
+new_prediction = loaded_model.predict(
+    new_process_scaled
+)
+
+
+# Get anomaly score
+new_score = loaded_model.decision_function(
+    new_process_scaled
+)
+
+
+print("\nNEW PROCESS TEST\n")
+print("New Process:")
+print(new_process)
+
+if new_prediction[0] == -1:
+    print("\nResult: ANOMALY DETECTED")
+else:
+    print("\nResult: NORMAL PROCESS")
+print("Anomaly Score:", new_score[0])
