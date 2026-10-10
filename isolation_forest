@@ -1,409 +1,164 @@
+
+import os
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import joblib
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+
 from sklearn.ensemble import IsolationForest
 
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    accuracy_score
-)
+# Files
+history_file = "historical_process_records.csv"
+model_file = "process_anomaly_model.pkl"
 
-#DataSet
-np.random.seed(50)
-normal_count = 500
-anomaly_count = 50cd..
+features = [
+    "process_size_mb",
+    "memory_usage_mb",
+    "cpu_usage",
+    "execution_time_sec",
+    "thread_count",
+    "network_connections",
+    "bytes_sent_mb",
+    "failed_accesses",
+    "file_operations"
+]
 
-normal_connections = np.random.normal(
-    loc=15, #Mean
-    scale=4, #SD
-    size=normal_count
-)
+# Generate historical records
+def generate_history(count=800):
+    rng = np.random.default_rng()
 
-normal_bytes_sent = np.random.normal(
-    loc=1500,
-    scale=400,
-    size=normal_count
-)
+    data = pd.DataFrame({
+        "process_size_mb": rng.lognormal(2.0, 0.65, count),
+        "memory_usage_mb": rng.lognormal(3.0, 0.55, count),
+        "cpu_usage": rng.beta(2, 8, count) * 100,
+        "execution_time_sec": rng.lognormal(2.0, 0.65, count),
+        "thread_count": rng.integers(1, 35, count),
+        "network_connections": rng.poisson(3, count),
+        "bytes_sent_mb": rng.lognormal(-0.5, 1.0, count),
+        "failed_accesses": rng.poisson(0.3, count),
+        "file_operations": rng.poisson(20, count)
+    })
 
-normal_failed_logins = np.random.poisson(
-    lam=1,
-    size=normal_count
-)
+    data["process_size_mb"] = data["process_size_mb"].clip(0.5, 250)
+    data["memory_usage_mb"] = data["memory_usage_mb"].clip(2, 1500)
+    data["cpu_usage"] = data["cpu_usage"].clip(0, 100)
+    data["execution_time_sec"] = data["execution_time_sec"].clip(0.1, 600)
+    data["thread_count"] = data["thread_count"].clip(1, 100)
+    data["network_connections"] = data["network_connections"].clip(0, 100)
+    data["bytes_sent_mb"] = data["bytes_sent_mb"].clip(0, 500)
+    data["failed_accesses"] = data["failed_accesses"].clip(0, 20)
+    data["file_operations"] = data["file_operations"].clip(0, 1000)
 
-normal_cpu_usage = np.random.normal(
-    loc=30,
-    scale=8,
-    size=normal_count
-)
-
-normal_memory_usage = np.random.normal(
-    loc=40,
-    scale=10,
-    size=normal_count
-)
-
-
-anomaly_connections = np.random.normal(
-    loc=150,
-    scale=40,
-    size=anomaly_count
-)
-
-anomaly_bytes_sent = np.random.normal(
-    loc=50000,
-    scale=15000,
-    size=anomaly_count
-)
-
-anomaly_failed_logins = np.random.poisson(
-    lam=25,
-    size=anomaly_count
-)
-
-anomaly_cpu_usage = np.random.normal(
-    loc=90,
-    scale=5,
-    size=anomaly_count
-)
-
-anomaly_memory_usage = np.random.normal(
-    loc=90,
-    scale=5,
-    size=anomaly_count
-)
+    return data
 
 
-# Combine
-connections = np.concatenate([
-    normal_connections,
-    anomaly_connections
-])
+# Prepare features
+def prepare_features(data):
+    result = data[features].copy()
 
-bytes_sent = np.concatenate([
-    normal_bytes_sent,
-    anomaly_bytes_sent
-])
-
-failed_logins = np.concatenate([
-    normal_failed_logins,
-    anomaly_failed_logins
-])
-
-cpu_usage = np.concatenate([
-    normal_cpu_usage,
-    anomaly_cpu_usage
-])
-
-memory_usage = np.concatenate([
-    normal_memory_usage,
-    anomaly_memory_usage
-])
-
-
-# Lables
-# 0 = Normal
-# 1 = Anomaly
-
-labels = np.concatenate([
-    np.zeros(normal_count),
-    np.ones(anomaly_count)
-])
-
-df = pd.DataFrame({
-    "connections": connections,
-    "bytes_sent": bytes_sent,
-    "failed_logins": failed_logins,
-    "cpu_usage": cpu_usage,
-    "memory_usage": memory_usage,
-    "label": labels
-})
-
-
-# Cleaning
-
-df["connections"] = df["connections"].clip(lower=0) #if val<0, replace with 0
-df["bytes_sent"] = df["bytes_sent"].clip(lower=0)
-df["failed_logins"] = df["failed_logins"].clip(lower=0)
-df["cpu_usage"] = df["cpu_usage"].clip(
-    lower=0,
-    upper=100
-)
-
-df["memory_usage"] = df["memory_usage"].clip(
-    lower=0,
-    upper=100
-)
-
-print("\nDATASET\n")
-print(df.head())
-print("\nDataset Shape:")
-print(df.shape)
-print("\nDataset Information:")
-print(df.info())
-print("\nStatistical Summary:")
-print(df.describe())
-print("\nClass Distribution:")
-print(df["label"].value_counts())
-
-features = ["connections","bytes_sent","failed_logins","cpu_usage","memory_usage"]
-X = df[features]
-y = df["label"]
-
-#Splitting
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size=0.20,
-    random_state=42,
-    stratify=y
-)
-
-
-print("\nDATA SPLIT\n")
-print("Training samples:", len(X_train))
-print("Testing samples:", len(X_test))
-
-#Feature Scaling
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
-print("\nFeature scaling completed.")
-
-model = IsolationForest(
-    n_estimators=200,
-    contamination=0.10,
-    max_samples="auto",
-    max_features=1.0,
-    random_state=42
-)
-
-print("\nMODEL TRAINING\n")
-model.fit(X_train_scaled)
-print("Isolation Forest training completed.")
-
-predictions = model.predict(X_test_scaled)
-
-# 1<->0, -1<->1
-
-predictions = np.where(
-    predictions == -1,
-    1,
-    0
-)
-
-
-#Anomaly Scores
-
-anomaly_scores = model.decision_function(
-    X_test_scaled
-)
-
-print("\nMODEL EVALUATION\n")
-
-accuracy = accuracy_score(
-    y_test,
-    predictions
-)
-
-print("Accuracy:", accuracy)
-print("\nConfusion Matrix:")
-
-cm = confusion_matrix(
-    y_test,
-    predictions
-)
-
-print(cm)
-
-print("\nClassification Report:")
-
-print(
-    classification_report(
-        y_test,
-        predictions,
-        target_names=[
-            "Normal",
-            "Anomaly"
-        ]
+    result["memory_size_ratio"] = (
+        result["memory_usage_mb"] /
+        result["process_size_mb"].clip(lower=0.1)
     )
-)
+
+    result["time_size_ratio"] = (
+        result["execution_time_sec"] /
+        result["process_size_mb"].clip(lower=0.1)
+    )
+
+    result["network_per_thread"] = (
+        result["network_connections"] /
+        result["thread_count"].clip(lower=1)
+    )
+
+    result["data_per_connection"] = (
+        result["bytes_sent_mb"] /
+        result["network_connections"].clip(lower=1)
+    )
+
+    return result.replace([np.inf, -np.inf], 0).fillna(0)
 
 
-#Result DF
-
-results = X_test.copy()
-results["actual"] = y_test.values
-results["predicted"] = predictions
-results["anomaly_score"] = anomaly_scores
-
-results["actual_status"] = results["actual"].map({
-    0: "Normal",
-    1: "Anomaly"
-})
-
-results["predicted_status"] = results["predicted"].map({
-    0: "Normal",
-    1: "Anomaly"
-})
-
-print("\nPREDICTION RESULTS\n")
-print(
-    results[
-        [
-            "connections",
-            "bytes_sent",
-            "failed_logins",
-            "cpu_usage",
-            "memory_usage",
-            "actual_status",
-            "predicted_status",
-            "anomaly_score"
-        ]
-    ].head(20)
-)
-
-detected_anomalies = results[
-    results["predicted"] == 1
-]
-
-print("\nDETECTED ANOMALIES\n")
-print(detected_anomalies)
-
-#CM
-
-plt.figure(figsize=(6, 5))
-plt.imshow(cm)
-plt.title("Isolation Forest - Confusion Matrix")
-plt.xlabel("Predicted")
-plt.ylabel("Actual")
-plt.xticks(
-    [0, 1],
-    ["Normal", "Anomaly"]
-)
-
-plt.yticks(
-    [0, 1],
-    ["Normal", "Anomaly"]
-)
-
-for i in range(2):
-    for j in range(2):
-        plt.text(
-            j,
-            i,
-            cm[i, j],
-            ha="center",
-            va="center"
-        )
-
-plt.colorbar()
-plt.show()
-plt.figure(figsize=(10, 5))
-plt.scatter(
-    range(len(anomaly_scores)),
-    anomaly_scores,
-    c=predictions
-)
-
-plt.axhline(
-    y=0,
-    linestyle="--"
-)
-plt.title("Isolation Forest Anomaly Scores")
-plt.xlabel("Test Sample")
-plt.ylabel("Anomaly Score")
-plt.show()
-
-#CPU, net connections
-plt.figure(figsize=(8, 6))
-normal_points = results[
-    results["predicted"] == 0
-]
-
-anomaly_points = results[
-    results["predicted"] == 1
-]
-
-plt.scatter(
-    normal_points["connections"],
-    normal_points["cpu_usage"],
-    label="Normal"
-)
-
-plt.scatter(
-    anomaly_points["connections"],
-    anomaly_points["cpu_usage"],
-    label="Anomaly"
-)
-
-plt.xlabel("Network Connections")
-
-plt.ylabel("CPU Usage (%)")
-
-plt.title(
-    "Network Connections vs CPU Usage"
-)
-plt.legend()
-plt.show()
-
-#Saving model
-joblib.dump(
-    model,
-    "isolation_forest_model.pkl"
-)
-
-joblib.dump(
-    scaler,
-    "scaler.pkl"
-)
-
-#Loading model
-loaded_model = joblib.load(
-    "isolation_forest_model.pkl"
-)
-
-loaded_scaler = joblib.load(
-    "scaler.pkl"
-)
-
-#Testing
-new_process = pd.DataFrame({
-    "connections": [180],
-    "bytes_sent": [60000],
-    "failed_logins": [30],
-    "cpu_usage": [95],
-    "memory_usage": [92]
-})
-
-
-# Scale the new process
-new_process_scaled = loaded_scaler.transform(
-    new_process
-)
-
-
-# Predict
-new_prediction = loaded_model.predict(
-    new_process_scaled
-)
-
-
-# Get anomaly score
-new_score = loaded_model.decision_function(
-    new_process_scaled
-)
-
-
-print("\nNEW PROCESS TEST\n")
-print("New Process:")
-print(new_process)
-
-if new_prediction[0] == -1:
-    print("\nResult: ANOMALY DETECTED")
+# Load or create historical data
+if os.path.exists(history_file):
+    history = pd.read_csv(history_file)
+    print("Loaded historical process records.")
 else:
-    print("\nResult: NORMAL PROCESS")
-print("Anomaly Score:", new_score[0])
+    history = generate_history()
+    history.to_csv(history_file, index=False)
+    print("Created historical process records.")
+
+# Load or train model
+if os.path.exists(model_file):
+    model = joblib.load(model_file)
+    print("Loaded previously trained model.")
+else:
+    X_history = prepare_features(history)
+
+    model = IsolationForest(
+        n_estimators=250,
+        contamination=0.05,
+        max_samples="auto",
+        random_state=42
+    )
+
+    model.fit(X_history)
+    joblib.dump(model, model_file)
+    print("Model trained and saved.")
+
+# Generate one new process
+rng = np.random.default_rng()
+
+if rng.random() < 0.80:
+    new_process = pd.DataFrame([{
+        "process_size_mb": round(rng.lognormal(2.0, 0.65), 2),
+        "memory_usage_mb": round(rng.lognormal(3.0, 0.55), 2),
+        "cpu_usage": round(rng.beta(2, 8) * 100, 2),
+        "execution_time_sec": round(rng.lognormal(2.0, 0.65), 2),
+        "thread_count": int(rng.integers(1, 35)),
+        "network_connections": int(rng.poisson(3)),
+        "bytes_sent_mb": round(rng.lognormal(-0.5, 1.0), 2),
+        "failed_accesses": int(rng.poisson(0.3)),
+        "file_operations": int(rng.poisson(20))
+    }])
+else:
+    pattern = rng.choice(["memory", "cpu", "time", "network", "access"])
+
+    new_process = pd.DataFrame([{
+        "process_size_mb": round(rng.uniform(1, 10), 2),
+        "memory_usage_mb": round(rng.uniform(20, 100), 2),
+        "cpu_usage": round(rng.uniform(10, 40), 2),
+        "execution_time_sec": round(rng.uniform(1, 30), 2),
+        "thread_count": int(rng.integers(1, 15)),
+        "network_connections": int(rng.integers(0, 10)),
+        "bytes_sent_mb": round(rng.uniform(0, 10), 2),
+        "failed_accesses": int(rng.integers(0, 3)),
+        "file_operations": int(rng.integers(0, 50))
+    }])
+
+    if pattern == "memory":
+        new_process.loc[0, "memory_usage_mb"] = round(rng.uniform(900, 1800), 2)
+    elif pattern == "cpu":
+        new_process.loc[0, "cpu_usage"] = round(rng.uniform(90, 100), 2)
+    elif pattern == "time":
+        new_process.loc[0, "execution_time_sec"] = round(rng.uniform(800, 2000), 2)
+    elif pattern == "network":
+        new_process.loc[0, "network_connections"] = int(rng.integers(100, 300))
+        new_process.loc[0, "bytes_sent_mb"] = round(rng.uniform(500, 1500), 2)
+    elif pattern == "access":
+        new_process.loc[0, "failed_accesses"] = int(rng.integers(20, 100))
+        new_process.loc[0, "file_operations"] = int(rng.integers(800, 1500))
+
+# Calculate score
+X_new = prepare_features(new_process)
+anomaly_score = model.decision_function(X_new)[0]
+
+# Display result
+print("\nNew Process Details:")
+print(new_process.to_string(index=False))
+print("\nAnomaly Score:", round(float(anomaly_score), 4))
+
+# Save result
+new_process["anomaly_score"] = round(float(anomaly_score), 4)
+new_process.to_csv("latest_process_score.csv", index=False)
+
+print("\nScore saved to latest_process_score.csv")
