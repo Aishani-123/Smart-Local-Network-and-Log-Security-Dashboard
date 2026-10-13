@@ -1,16 +1,16 @@
-
 import os
+import time
+import psutil
 import numpy as np
 import pandas as pd
 import joblib
-
 from sklearn.ensemble import IsolationForest
 
-# Files
-history_file = "historical_process_records.csv"
-model_file = "process_anomaly_model.pkl"
+history_file = "real_historical_process_records.csv"
+model_file = "real_process_anomaly_model.pkl"
+result_file = "latest_process_score.csv"
 
-features = [
+base_features = [
     "process_size_mb",
     "memory_usage_mb",
     "cpu_usage",
@@ -22,77 +22,105 @@ features = [
     "file_operations"
 ]
 
-# Generate historical records
-def generate_history(count=800):
-    rng = np.random.default_rng()
-
-    data = pd.DataFrame({
-        "process_size_mb": rng.lognormal(2.0, 0.65, count),
-        "memory_usage_mb": rng.lognormal(3.0, 0.55, count),
-        "cpu_usage": rng.beta(2, 8, count) * 100,
-        "execution_time_sec": rng.lognormal(2.0, 0.65, count),
-        "thread_count": rng.integers(1, 35, count),
-        "network_connections": rng.poisson(3, count),
-        "bytes_sent_mb": rng.lognormal(-0.5, 1.0, count),
-        "failed_accesses": rng.poisson(0.3, count),
-        "file_operations": rng.poisson(20, count)
-    })
-
-    data["process_size_mb"] = data["process_size_mb"].clip(0.5, 250)
-    data["memory_usage_mb"] = data["memory_usage_mb"].clip(2, 1500)
-    data["cpu_usage"] = data["cpu_usage"].clip(0, 100)
-    data["execution_time_sec"] = data["execution_time_sec"].clip(0.1, 600)
-    data["thread_count"] = data["thread_count"].clip(1, 100)
-    data["network_connections"] = data["network_connections"].clip(0, 100)
-    data["bytes_sent_mb"] = data["bytes_sent_mb"].clip(0, 500)
-    data["failed_accesses"] = data["failed_accesses"].clip(0, 20)
-    data["file_operations"] = data["file_operations"].clip(0, 1000)
-
+def prepare_features(data):
+    data = data.copy()
+    data["memory_size_ratio"] = data["memory_usage_mb"] / data["process_size_mb"].clip(lower=0.1)
+    data["time_size_ratio"] = data["execution_time_sec"] / data["process_size_mb"].clip(lower=0.1)
+    data["network_per_thread"] = data["network_connections"] / data["thread_count"].clip(lower=1)
+    data["data_per_connection"] = data["bytes_sent_mb"] / data["network_connections"].clip(lower=1)
     return data
 
+def get_process_record(proc, cpu_interval=None):
+    try:
+        with proc.oneshot():
+            pid = proc.pid
+            memory = proc.memory_info().rss / (1024 * 1024)
+            cpu = proc.cpu_percent(interval=cpu_interval)
+            threads = proc.num_threads()
+            age = max(0, time.time() - proc.create_time())
 
-# Prepare features
-def prepare_features(data):
-    result = data[features].copy()
+            try:
+                exe = proc.exe()
+                size = os.path.getsize(exe) / (1024 * 1024) if exe and os.path.isfile(exe) else 0.1
+            except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                size = 0.1
 
-    result["memory_size_ratio"] = (
-        result["memory_usage_mb"] /
-        result["process_size_mb"].clip(lower=0.1)
-    )
+            try:
+                connections = len(proc.net_connections(kind="inet"))
+            except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                connections = 0
 
-    result["time_size_ratio"] = (
-        result["execution_time_sec"] /
-        result["process_size_mb"].clip(lower=0.1)
-    )
+        return {
+            "pid": pid,
+            "process_size_mb": max(size, 0.1),
+            "memory_usage_mb": memory,
+            "cpu_usage": cpu,
+            "execution_time_sec": age,
+            "thread_count": max(threads, 1),
+            "network_connections": connections,
+            "bytes_sent_mb": 0.0,
+            "failed_accesses": 0,
+            "file_operations": 0
+        }
 
-    result["network_per_thread"] = (
-        result["network_connections"] /
-        result["thread_count"].clip(lower=1)
-    )
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+        return None
 
-    result["data_per_connection"] = (
-        result["bytes_sent_mb"] /
-        result["network_connections"].clip(lower=1)
-    )
+def collect_real_history():
+    records = []
 
-    return result.replace([np.inf, -np.inf], 0).fillna(0)
+    print("Collecting real process data from your computer...")
 
+    for sample in range(5):
+        for proc in psutil.process_iter():
+            record = get_process_record(proc)
+            if record is not None:
+                records.append(record)
 
-# Load or create historical data
-if os.path.exists(history_file):
-    history = pd.read_csv(history_file)
-    print("Loaded historical process records.")
-else:
-    history = generate_history()
+        if sample < 4:
+            time.sleep(2)
+
+    if len(records) < 10:
+        raise RuntimeError("Not enough process data was collected. Try again.")
+
+    history = pd.DataFrame(records)
+    history = history[base_features].replace([np.inf, -np.inf], np.nan)
+    history = history.dropna()
+    history = history[history["process_size_mb"] > 0]
+
+    if len(history) < 10:
+        raise RuntimeError("Not enough valid process records to train the model.")
+
     history.to_csv(history_file, index=False)
-    print("Created historical process records.")
+    print("Real process records saved:", len(history))
+    return history
 
-# Load or train model
-if os.path.exists(model_file):
-    model = joblib.load(model_file)
-    print("Loaded previously trained model.")
-else:
-    X_history = prepare_features(history)
+def get_history():
+    if os.path.exists(history_file):
+        try:
+            history = pd.read_csv(history_file)
+            if all(column in history.columns for column in base_features):
+                history = history[base_features].replace([np.inf, -np.inf], np.nan).dropna()
+                if len(history) >= 10:
+                    print("Using saved real process history.")
+                    return history
+        except (OSError, ValueError, pd.errors.ParserError):
+            pass
+
+    return collect_real_history()
+
+def load_or_train_model():
+    if os.path.exists(model_file):
+        try:
+            model = joblib.load(model_file)
+            if getattr(model, "n_features_in_", None) == len(base_features) + 4:
+                print("Loaded saved anomaly detection model.")
+                return model
+        except (OSError, ValueError, EOFError, AttributeError):
+            pass
+
+    history = get_history()
+    X_history = prepare_features(history[base_features])
 
     model = IsolationForest(
         n_estimators=250,
@@ -103,62 +131,39 @@ else:
 
     model.fit(X_history)
     joblib.dump(model, model_file)
-    print("Model trained and saved.")
+    print("Model trained on collected process records and saved.")
+    return model
 
-# Generate one new process
-rng = np.random.default_rng()
+try:
+    model = load_or_train_model()
 
-if rng.random() < 0.80:
-    new_process = pd.DataFrame([{
-        "process_size_mb": round(rng.lognormal(2.0, 0.65), 2),
-        "memory_usage_mb": round(rng.lognormal(3.0, 0.55), 2),
-        "cpu_usage": round(rng.beta(2, 8) * 100, 2),
-        "execution_time_sec": round(rng.lognormal(2.0, 0.65), 2),
-        "thread_count": int(rng.integers(1, 35)),
-        "network_connections": int(rng.poisson(3)),
-        "bytes_sent_mb": round(rng.lognormal(-0.5, 1.0), 2),
-        "failed_accesses": int(rng.poisson(0.3)),
-        "file_operations": int(rng.poisson(20))
-    }])
-else:
-    pattern = rng.choice(["memory", "cpu", "time", "network", "access"])
+    pid = int(input("Enter the process ID (PID) to analyse: "))
 
-    new_process = pd.DataFrame([{
-        "process_size_mb": round(rng.uniform(1, 10), 2),
-        "memory_usage_mb": round(rng.uniform(20, 100), 2),
-        "cpu_usage": round(rng.uniform(10, 40), 2),
-        "execution_time_sec": round(rng.uniform(1, 30), 2),
-        "thread_count": int(rng.integers(1, 15)),
-        "network_connections": int(rng.integers(0, 10)),
-        "bytes_sent_mb": round(rng.uniform(0, 10), 2),
-        "failed_accesses": int(rng.integers(0, 3)),
-        "file_operations": int(rng.integers(0, 50))
-    }])
+    try:
+        proc = psutil.Process(pid)
+        record = get_process_record(proc, cpu_interval=1)
 
-    if pattern == "memory":
-        new_process.loc[0, "memory_usage_mb"] = round(rng.uniform(900, 1800), 2)
-    elif pattern == "cpu":
-        new_process.loc[0, "cpu_usage"] = round(rng.uniform(90, 100), 2)
-    elif pattern == "time":
-        new_process.loc[0, "execution_time_sec"] = round(rng.uniform(800, 2000), 2)
-    elif pattern == "network":
-        new_process.loc[0, "network_connections"] = int(rng.integers(100, 300))
-        new_process.loc[0, "bytes_sent_mb"] = round(rng.uniform(500, 1500), 2)
-    elif pattern == "access":
-        new_process.loc[0, "failed_accesses"] = int(rng.integers(20, 100))
-        new_process.loc[0, "file_operations"] = int(rng.integers(800, 1500))
+        if record is None:
+            raise RuntimeError("Could not access this process. It may have closed or access may be denied.")
 
-# Calculate score
-X_new = prepare_features(new_process)
-anomaly_score = model.decision_function(X_new)[0]
+        new_process = pd.DataFrame([record])
+        X_new = prepare_features(new_process[base_features])
 
-# Display result
-print("\nNew Process Details:")
-print(new_process.to_string(index=False))
-print("\nAnomaly Score:", round(float(anomaly_score), 4))
+        score = float(model.decision_function(X_new)[0])
 
-# Save result
-new_process["anomaly_score"] = round(float(anomaly_score), 4)
-new_process.to_csv("latest_process_score.csv", index=False)
+        print("\nAnomaly score:", round(score, 6))
 
-print("\nScore saved to latest_process_score.csv")
+        if score < 0:
+            print("The process is unusual compared with the training data.")
+        else:
+            print("The process is not identified as unusual by the model.")
+
+        new_process["anomaly_score"] = score
+        new_process[["pid"] + base_features + ["anomaly_score"]].to_csv(result_file, index=False)
+        print("Result saved to", result_file)
+
+    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError, RuntimeError) as e:
+        print("Could not analyse the process:", e)
+
+except (RuntimeError, OSError, ValueError) as e:
+    print("Error:", e)
