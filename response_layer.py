@@ -186,7 +186,9 @@ def print_header():
     print("=" * 64)
     print("  Mode             : " + mode)
     print("  Actual changes   : " + changes)
-    print("=" * 64) 
+    print("  Version          : 1.1")
+    print("  Safety           : Protected process checks enabled")
+    print("=" * 64)
 def print_event_result(number, result):
     action = result["action"].replace("_", " ").upper()
     severity = str(result.get("severity") or "unknown").upper()
@@ -316,3 +318,15 @@ if __name__ == "__main__":
     print_event_result(len(results), unauthorized_result)
     print_summary(results)
  
+
+       
+   
+        
+    
+    
+    
+        
+            
+    
+            
+   
