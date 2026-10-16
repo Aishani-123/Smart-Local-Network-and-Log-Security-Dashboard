@@ -1,9 +1,10 @@
 """
 db.models – SQLAlchemy ORM models for hosts, scan runs, process observations,
-and network connections.
+network connections, security events, and response actions.
 
 Defines schema entities for tracking observed hosts, system-level metrics
-snapshots, per-process telemetry/ML scores, and active network connections.
+snapshots, per-process telemetry/ML scores, active network connections,
+security events, and response actions taken.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -51,6 +53,11 @@ class Host(Base):
     # Relationships
     scan_runs: Mapped[List[ScanRun]] = relationship(
         "ScanRun",
+        back_populates="host",
+        passive_deletes="all",
+    )
+    security_events: Mapped[List[SecurityEvent]] = relationship(
+        "SecurityEvent",
         back_populates="host",
         passive_deletes="all",
     )
@@ -112,6 +119,11 @@ class ScanRun(Base):
     )
     network_connections: Mapped[List[NetworkConnection]] = relationship(
         "NetworkConnection",
+        back_populates="scan_run",
+        passive_deletes="all",
+    )
+    security_events: Mapped[List[SecurityEvent]] = relationship(
+        "SecurityEvent",
         back_populates="scan_run",
         passive_deletes="all",
     )
@@ -259,4 +271,125 @@ class NetworkConnection(Base):
         return (
             f"<NetworkConnection(id={self.id}, scan_id={self.scan_id}, "
             f"pid={self.pid}, status='{self.status}')>"
+        )
+
+
+class SecurityEvent(Base):
+    """Represents a discrete security event or anomaly detected on a host."""
+
+    __tablename__ = "security_events"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "deduplication_key",
+            name="uq_security_events_deduplication_key",
+        ),
+        CheckConstraint(
+            "severity IS NULL OR severity IN ('low', 'medium', 'high')",
+            name="ck_security_events_severity_valid",
+        ),
+        Index("ix_security_events_host_id_occurred_at", "host_id", "occurred_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("hosts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    scan_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("scan_runs.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    process_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    anomaly_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    destination_ip: Mapped[Optional[str]] = mapped_column(INET, nullable=True)
+    deduplication_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Relationships
+    host: Mapped[Host] = relationship(
+        "Host",
+        back_populates="security_events",
+    )
+    scan_run: Mapped[Optional[ScanRun]] = relationship(
+        "ScanRun",
+        back_populates="security_events",
+    )
+    response_actions: Mapped[List[ResponseAction]] = relationship(
+        "ResponseAction",
+        back_populates="security_event",
+        passive_deletes="all",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<SecurityEvent(id={self.id}, host_id={self.host_id}, "
+            f"event_type='{self.event_type}', severity='{self.severity}')>"
+        )
+
+
+class ResponseAction(Base):
+    """Represents an automated or admin-approved mitigation action taken for an event."""
+
+    __tablename__ = "response_actions"
+
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('none', 'alert_only', 'lower_priority', 'terminate_process', 'block_ip')",
+            name="ck_response_actions_action_valid",
+        ),
+        CheckConstraint(
+            "severity IS NULL OR severity IN ('low', 'medium', 'high')",
+            name="ck_response_actions_severity_valid",
+        ),
+        Index(
+            "ix_response_actions_security_event_id_created_at",
+            "security_event_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    security_event_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("security_events.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    process_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    anomaly_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    severity: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    needs_admin_approval: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    requested_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    executed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Relationships
+    security_event: Mapped[SecurityEvent] = relationship(
+        "SecurityEvent",
+        back_populates="response_actions",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ResponseAction(id={self.id}, security_event_id={self.security_event_id}, "
+            f"action='{self.action}', executed={self.executed})>"
         )
