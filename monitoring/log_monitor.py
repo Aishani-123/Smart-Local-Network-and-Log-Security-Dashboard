@@ -1,11 +1,16 @@
 import time
 from pathlib import Path
 from datetime import datetime, timezone
-from collections import defaultdict
+from collections import defaultdict, deque
+from datetime import timedelta
 
 
 LOG_FILE = Path(__file__).parent.parent / "logs" / "security.log"
-failed_login_counts = defaultdict(int)
+failed_login_attempts = defaultdict(deque)
+
+TIME_WINDOW = timedelta(seconds=60)
+MAX_ATTEMPTS = 3
+
 
 
 def analyze_log_line(line):
@@ -14,7 +19,7 @@ def analyze_log_line(line):
     if not line:
         return None
 
-    
+    timestamp = datetime.now(timezone.utc)
     event_type = "normal"
     severity = "low"
 
@@ -22,17 +27,20 @@ def analyze_log_line(line):
         event_type = "failed_login"
         severity = "medium"
 
-        parts = line.split("user=")
+        parts = line.split("user=", 1)
 
-        
         if len(parts) > 1:
             username = parts[1].split()[0]
+            attempts = failed_login_attempts[username]
 
-            failed_login_counts[username] += 1
+            attempts.append(timestamp)
 
-            
+            cutoff_time = timestamp - TIME_WINDOW
 
-            if failed_login_counts[username] >= 3:
+            while attempts and attempts[0] < cutoff_time:
+                attempts.popleft()
+
+            if len(attempts) >= MAX_ATTEMPTS:
                 event_type = "possible_brute_force"
                 severity = "high"
 
@@ -45,11 +53,15 @@ def analyze_log_line(line):
         severity = "low"
 
     return {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": timestamp.isoformat(),
         "event_type": event_type,
         "severity": severity,
         "message": line
     }
+
+
+
+
 
 def monitor_log():
     print(f"Monitoring log file: {LOG_FILE}")
