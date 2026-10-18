@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parent
 LOG_DIR = ROOT / "logs"
 ACTION_LOG = LOG_DIR / "response_actions.jsonl"
 
-# A model score below 0.05 follows the supplied Isolation Forest decision rule.
+
 ANOMALY_SCORE_THRESHOLD = 0.05
 HIGH_ANOMALY_SCORE = -0.30
 HIGH_CPU_LIMIT = 90.0
@@ -19,7 +19,7 @@ def classify_risk(anomaly_score=1.0, severity="low", cpu_usage=0,
     score = float(anomaly_score if anomaly_score is not None else 1.0)
     severity = str(severity or "low").lower()
     cpu = float(cpu_usage or 0)
-    # High is reserved for a very strong model deviation and sustained heavy CPU.
+    
     if severity == "high" or (score <= HIGH_ANOMALY_SCORE and cpu >= HIGH_CPU_LIMIT and sustained_high_cpu):
         return "high"
     if severity == "medium" or score < ANOMALY_SCORE_THRESHOLD or cpu >= DEMO_CPU_LIMIT:
@@ -37,7 +37,7 @@ def risk_reason(anomaly_score=1.0, severity="low", cpu_usage=0,
     if score <= HIGH_ANOMALY_SCORE and cpu >= HIGH_CPU_LIMIT and sustained_high_cpu:
         return f"Strong anomaly score ({score:.3f}) and sustained CPU use ({cpu:.0f}%)."
     if cpu >= DEMO_CPU_LIMIT:
-        #return f"High CPU use ({cpu:.0f}%) is being watched; no process has been stopped."
+        
         return f"High CPU usage."
     if score < ANOMALY_SCORE_THRESHOLD:
         return f"Unusual score ({score:.3f}); flagged for review."
@@ -53,7 +53,7 @@ def classify_network_health(processes, log_events, connections):
     log_attention = any(e.get("severity") in ("medium", "high") for e in log_events)
     active_remote = sum(bool(c.get("destination_ip")) and c.get("status") == "ESTABLISHED"
                         for c in connections)
-    # Connection count alone never raises HIGH; high needs separate corroboration.
+    
     if high_processes >= 2 or brute_force >= 3 or (active_remote >= 250 and high_processes >= 1):
         return "HIGH", "Multiple severe process indicators or repeated failed logins."
     if high_processes or medium_processes or log_attention or active_remote >= 100:
