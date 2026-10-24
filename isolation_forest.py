@@ -18,7 +18,6 @@ base_features = ["process_size_mb", "memory_usage_mb", "cpu_usage", "execution_t
                  "thread_count", "network_connections", "bytes_sent_mb", "failed_accesses",
                  "file_operations"]
 
-
 def prepare_features(data):
     data = data.copy()
     data["memory_size_ratio"] = data["memory_usage_mb"] / data["process_size_mb"].clip(lower=0.1)
@@ -27,14 +26,12 @@ def prepare_features(data):
     data["data_per_connection"] = data["bytes_sent_mb"] / data["network_connections"].clip(lower=1)
     return data.replace([np.inf, -np.inf], np.nan).fillna(0)
 
-
 @lru_cache(maxsize=1024)
 def _executable_size(executable):
     try:
         return os.path.getsize(executable) / (1024 * 1024) if executable and os.path.isfile(executable) else 0.1
     except OSError:
         return 0.1
-
 
 def get_process_record(proc, cpu_interval=None, network_count=None):
     try:
@@ -63,7 +60,6 @@ def get_process_record(proc, cpu_interval=None, network_count=None):
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
         return None
 
-
 def collect_real_history(samples=5, sample_interval=2):
     records = []
     for sample in range(samples):
@@ -84,7 +80,6 @@ def collect_real_history(samples=5, sample_interval=2):
     history.to_csv(history_file, index=False)
     return history
 
-
 def get_history(force_retrain=False):
     if not force_retrain and os.path.exists(history_file):
         try:
@@ -96,7 +91,6 @@ def get_history(force_retrain=False):
         except (OSError, ValueError, pd.errors.ParserError):
             pass
     return collect_real_history()
-
 
 def load_or_train_model(force_retrain=False):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -114,7 +108,6 @@ def load_or_train_model(force_retrain=False):
     model.fit(X_history)
     joblib.dump(model, model_file)
     return model
-
 
 def score_processes(model, cpu_by_pid=None, network_counts=None):
     cpu_by_pid = cpu_by_pid or {}
@@ -136,10 +129,8 @@ def score_processes(model, cpu_by_pid=None, network_counts=None):
     scores = model.decision_function(prepare_features(rows))
     for record, score in zip(results, scores):
         record["anomaly_score"] = float(score)
-        # Preserve the supplied script's score < 0.05 unusual-process threshold.
         record["is_anomalous"] = record["anomaly_score"] < 0.05
     return results
-
 
 def analyze_pid(pid, model=None):
     model = model or load_or_train_model()
@@ -152,7 +143,6 @@ def analyze_pid(pid, model=None):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([record])[ ["pid"] + base_features + ["anomaly_score"] ].to_csv(result_file, index=False)
     return record
-
 
 if __name__ == "__main__":
     try:
